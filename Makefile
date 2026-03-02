@@ -1,5 +1,16 @@
-TOP    = max1000_riscv_top
-JSON   = $(TOP).json
+# Which FPGA chip to target:
+#TARGET= synth_intel_altera -family max10
+#BLINKY_PCF = projects/max1000_blinky/blinky-max100.pcf
+
+TARGET= synth_ice40
+BLINKY_PCF = projects/max1000_blinky/blinky-ice40.pcf
+
+RV_TOP    = max1000_riscv_top
+RV_JSON   = $(RV_TOP).json
+
+BLINKY_TOP   = max1000_blinky
+BLINKY_JSON   = max1000_blinky.json
+
 YOSYS  = yosys -m ghdl
 GHDL   = ghdl
 STD    = --std=08
@@ -33,12 +44,21 @@ UTILS_SRCS = lib/utils/cdc_sync.vhd \
              lib/utils/uart_tx_iso.vhd \
              lib/utils/uart_tx.vhd
 
-WORK_SRCS = projects/max1000_riscv/sys_pll.vhd \
+RV_WORK_SRCS = \
+            projects/max1000_riscv/sys_pll.vhd \
             projects/max1000_riscv/max1000_riscv_top.vhd
+
+BLINKY_WORK_SRCS = \
+            projects/max1000_blinky/max1000_blinky.vhd
+
+BLINKY_UNUSED_SRCS = \
+	    projects/max1000_blinky/led_counter.vhd \
+            projects/max1000_blinky/max1000_blinky_top.vhd \
+            projects/max1000_blinky/pll15m.vhd
 
 .PHONY: all clean analyze-libs analyze-work
 
-all: $(JSON)
+all: $(BLINKY_JSON) $(RV_JSON)
 
 $(WDIR):
 	mkdir -p $(WDIR)
@@ -51,10 +71,22 @@ analyze-libs: | $(WDIR)
 	$(GHDL) -a $(GHDL_FLAGS) --work=utils        $(UTILS_SRCS)
 
 analyze-work: analyze-libs
-	$(GHDL) -a $(GHDL_FLAGS) --work=work $(WORK_SRCS)
+	$(GHDL) -a $(GHDL_FLAGS) --work=work $(RV_WORK_SRCS)
 
-$(JSON): analyze-work
-	$(YOSYS) -p 'ghdl $(GHDL_FLAGS) $(WORK_SRCS) -e $(TOP); synth_intel_altera -family max10 -json $@'
+$(RV_JSON): analyze-work
+	$(YOSYS) -p "ghdl $(GHDL_FLAGS) $(RV_WORK_SRCS) -e $(RV_TOP); $(TARGET) -json $@"
+
+$(BLINKY_JSON): | $(WDIR)
+	$(YOSYS) -p "ghdl $(GHDL_FLAGS) $(BLINKY_WORK_SRCS) -e $(BLINKY_TOP); $(TARGET) -json $@"
+
+blinky.bin: $(BLINKY_JSON) $(BLINKY_PCF)
+	nextpnr-ice40 --freq 64 --hx8k --package tq144:4k --json $(BLINKY_JSON) --pcf ${BLINKY_PCF} \
+	  --asc $@.asc --opt-timing --placer heap
+	icebox_explain $@.asc > $@.ex
+	icepack $@.asc $@
+
+load_blinky: blinky.bin
+	iceprog blinky.bin
 
 clean:
-	rm -rf $(WDIR) $(JSON)
+	rm -rf $(WDIR) $(RV_JSON) $(BLINKY_JSON) blinky.bin blinky.bin.asc blinky.bin.ex
